@@ -95,6 +95,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Android 13 and earlier: Health Connect APK opens this privacy rationale. -->
+        <activity
+            android:name=".HealthPermissionsRationaleActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+
         <!-- Health Connect permissions property (требуется для Android 14+) -->
         <property
             android:name="android.health.HealthConnectPermissions"
