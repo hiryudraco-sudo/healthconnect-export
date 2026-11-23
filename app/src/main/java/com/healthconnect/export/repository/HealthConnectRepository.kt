@@ -106,7 +106,7 @@ class HealthConnectRepository(
      * Возвращает ActivityResultContract для запроса разрешений Health Connect
      */
     fun createPermissionRequestContract(): ActivityResultContract<Set<String>, Set<String>> =
-        PermissionController.createRequestPermissionResultContract(context.packageName)
+        PermissionController.createRequestPermissionResultContract()
 
     /**
      * Возвращает набор Health Connect разрешений для указанных типов данных
