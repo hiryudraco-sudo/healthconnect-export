@@ -2,6 +2,7 @@ package com.healthconnect.export.repository
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.annotation.VisibleForTesting
@@ -161,6 +162,9 @@ class HealthConnectRepository(
      * permission, which the scheduled workers need to read anything at all.
      */
     suspend fun hasBackgroundReadPermission(): Boolean {
+        // Android 13 uses the standalone Health Connect provider; the background
+        // read permission is not available on this platform.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
         val c = client ?: return false
         val featureStatus =
             runCatching {
@@ -251,6 +255,8 @@ class HealthConnectRepository(
     ): List<T> {
         val c = client ?: return emptyList()
         val allRecords = mutableListOf<T>()
+        val seenIds = mutableSetOf<String>()
+        val seenPageTokens = mutableSetOf<String>()
         var pageToken: String? = null
         var pageCount = 0
         val maxPages = 100 // Safety limit to prevent infinite loops
@@ -278,12 +284,28 @@ class HealthConnectRepository(
                 Log.w(TAG, "readAllPages: empty page with non-null pageToken, stopping")
                 break
             }
-            allRecords.addAll(response.records)
-            pageToken = response.pageToken
+            val newRecords =
+                response.records.filter { record ->
+                    val id = record.metadata.id
+                    id.isBlank() || seenIds.add(id)
+                }
+            val duplicates = recordsOnPage - newRecords.size
             Log.d(
                 TAG,
-                "readAllPages(${request.recordType.simpleName}): page=$pageCount, got=$recordsOnPage, total=${allRecords.size}, nextToken=$pageToken",
+                "readAllPages($typeName): page=$pageCount, received=$recordsOnPage, " +
+                    "uniqueOnPage=${newRecords.size}, duplicates=$duplicates, totalUnique=${allRecords.size + newRecords.size}",
             )
+            if (recordsOnPage > 0 && newRecords.isEmpty()) {
+                Log.w(TAG, "readAllPages($typeName): page contains only previously seen records; stopping")
+                break
+            }
+            allRecords.addAll(newRecords)
+            val nextToken = response.pageToken
+            if (nextToken != null && (nextToken == pageToken || !seenPageTokens.add(nextToken))) {
+                Log.w(TAG, "readAllPages($typeName): repeated pagination token; stopping")
+                break
+            }
+            pageToken = nextToken
         } while (pageToken != null)
         return allRecords
     }
