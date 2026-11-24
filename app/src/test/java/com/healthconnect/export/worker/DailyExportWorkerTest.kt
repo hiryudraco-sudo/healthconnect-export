@@ -19,6 +19,8 @@ import org.junit.Assert.*
 import androidx.work.*
 import com.healthconnect.export.data.*
 import com.healthconnect.export.testing.FakeSharedPreferences
+import com.healthconnect.export.util.ExportSettings
+import com.healthconnect.export.util.DeliveryLog
 import com.healthconnect.export.repository.*
 import org.junit.Test
 import org.mockito.kotlin.*
@@ -114,6 +116,12 @@ class DailyExportWorkerTest {
         config: ExportConfig? = null,
         context: Context = mockApp,
     ): DailyExportWorker {
+        if (config != null) {
+            persistConfig(context, config)
+        }
+        runBlocking {
+            whenever(mockHealthRepo.backgroundReadDiagnostic()).thenReturn("test background diagnostic")
+        }
         val inputData =
             if (config != null) {
                 workDataOf(DailyExportWorker.KEY_CONFIG to json.encodeToString(config))
@@ -132,6 +140,21 @@ class DailyExportWorkerTest {
         setField(worker, "webhookRepo", mockWebhookRepo)
 
         return worker
+    }
+
+    private fun persistConfig(context: Context, config: ExportConfig) {
+        ExportSettings.prefs(context).edit()
+            .putStringSet(ExportSettings.KEY_SELECTED_TYPES, config.enabledTypes.map { it.name }.toSet())
+            .putString(ExportSettings.KEY_FREQUENCY, config.frequency.name)
+            .putBoolean(ExportSettings.KEY_AUTO_SYNC_DRIVE, config.autoSyncDrive)
+            .putString(ExportSettings.KEY_WEBHOOK_URL, config.webhookUrl)
+            .putString(ExportSettings.KEY_WEBHOOK_TOKEN, config.webhookAuthToken)
+            .putBoolean(ExportSettings.KEY_AUTO_SEND_WEBHOOK, config.autoSendWebhook)
+            .putBoolean(ExportSettings.KEY_AUTO_SEND_WEBHOOK_EVERY_2_HOURS, config.autoSendWebhookEvery2Hours)
+            .putString(ExportSettings.KEY_SOURCE_PACKAGE, config.selectedSourcePackage)
+            .putString(ExportSettings.KEY_EXPORT_FORMAT, config.exportFormat.name)
+            .putInt(ExportSettings.KEY_SCHEDULE_HOUR, config.scheduleHour ?: -1)
+            .apply()
     }
 
     // =============================================
@@ -413,6 +436,18 @@ class DailyExportWorkerTest {
 
             verify(mockHealthRepo).readPeriodInBatch(any(), any(), eq(HealthDataType.entries.toSet()), anyOrNull(), anyOrNull())
             verify(mockLocalRepo).saveRecords(any(), any())
+            assertEquals("failed: Drive not signed in", DeliveryLog.status(mockApp).lastAttemptResult)
+        }
+    }
+
+    @Test
+    fun `persisted manual frequency overrides queued daily config`() {
+        runBlocking {
+            val config = ExportConfig(setOf(HealthDataType.STEPS), ExportFrequency.DAILY, false)
+            val worker = createWorker(config)
+            ExportSettings.saveFrequency(mockApp, ExportFrequency.MANUAL)
+            assertEquals(ListenableWorker.Result.success(), worker.doWork())
+            verify(mockHealthRepo, never()).readPeriodInBatch(any(), any(), any(), anyOrNull(), anyOrNull())
         }
     }
 
