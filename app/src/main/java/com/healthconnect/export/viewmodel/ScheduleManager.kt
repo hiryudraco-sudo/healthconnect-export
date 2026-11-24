@@ -3,17 +3,19 @@ package com.healthconnect.export.viewmodel
 import android.app.Application
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import com.healthconnect.export.R
 import com.healthconnect.export.data.ExportConfig
 import com.healthconnect.export.data.ExportFrequency
 import com.healthconnect.export.util.ExportSettings
 import com.healthconnect.export.worker.DailyExportWorker
 import com.healthconnect.export.worker.DeliveryWatchdog
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 /**
  * Manages schedule-related logic for health data export.
@@ -32,15 +34,20 @@ sealed class ScheduleStatus {
     object Running : ScheduleStatus()
 }
 
-class ScheduleManager(
+fun interface ScheduleStatusSource {
+    fun observe(): Flow<ScheduleStatus>
+}
+
+class WorkManagerScheduleStatusSource(
     private val application: Application,
-    private val onStateUpdate: (ExportUiState.() -> ExportUiState) -> Unit,
-) {
-    fun observeStatus(scope: CoroutineScope) {
-        scope.launch {
-            WorkManager.getInstance(application).getWorkInfosForUniqueWorkFlow(DailyExportWorker.WORK_NAME).collect { infos ->
+) : ScheduleStatusSource {
+    override fun observe(): Flow<ScheduleStatus> =
+        WorkManager
+            .getInstance(application)
+            .getWorkInfosForUniqueWorkFlow(DailyExportWorker.WORK_NAME)
+            .map { infos ->
                 val active = infos.firstOrNull { !it.state.isFinished }
-                val status = when {
+                when {
                     active == null -> ScheduleStatus.NotScheduled
                     active.state == WorkInfo.State.RUNNING -> ScheduleStatus.Running
                     active.nextScheduleTimeMillis == Long.MAX_VALUE -> ScheduleStatus.Scheduled("Pending")
@@ -49,6 +56,17 @@ class ScheduleManager(
                         ScheduleStatus.Scheduled("Next eligible run: ${formatter.format(Instant.ofEpochMilli(active.nextScheduleTimeMillis))}")
                     }
                 }
+            }
+}
+
+class ScheduleManager(
+    private val application: Application,
+    private val statusSource: ScheduleStatusSource = WorkManagerScheduleStatusSource(application),
+    private val onStateUpdate: (ExportUiState.() -> ExportUiState) -> Unit,
+) {
+    fun observeStatus(scope: CoroutineScope) {
+        scope.launch {
+            statusSource.observe().collect { status ->
                 onStateUpdate { copy(scheduleStatus = status) }
             }
         }
