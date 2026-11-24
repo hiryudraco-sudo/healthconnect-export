@@ -161,19 +161,24 @@ class HealthConnectRepository(
      * Android 14+ it reflects the user-granted `READ_HEALTH_DATA_IN_BACKGROUND`
      * permission, which the scheduled workers need to read anything at all.
      */
+    suspend fun backgroundReadDiagnostic(): String {
+        val c = client ?: return "Health Connect client unavailable"
+        val feature = runCatching {
+            c.features.getFeatureStatus(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
+        }.getOrNull()
+        val granted = runCatching {
+            c.permissionController.getGrantedPermissions().contains(BACKGROUND_READ_PERMISSION)
+        }.getOrNull()
+        return "SDK=${android.os.Build.VERSION.SDK_INT}, background feature=$feature, granted=$granted"
+    }
+
     suspend fun hasBackgroundReadPermission(): Boolean {
-        // Android 13 uses the standalone Health Connect provider; the background
-        // read permission is not available on this platform.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
         val c = client ?: return false
         val featureStatus =
             runCatching {
                 c.features.getFeatureStatus(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
             }.getOrNull()
-        if (featureStatus != null && featureStatus != HealthConnectFeatures.FEATURE_STATUS_AVAILABLE) {
-            return true
-        }
-        if (featureStatus == null) return true
+        if (featureStatus != HealthConnectFeatures.FEATURE_STATUS_AVAILABLE) return false
         return runCatching {
             c.permissionController.getGrantedPermissions().contains(BACKGROUND_READ_PERMISSION)
         }.getOrDefault(false)
