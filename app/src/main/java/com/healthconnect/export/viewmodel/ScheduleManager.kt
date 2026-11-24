@@ -1,6 +1,10 @@
 package com.healthconnect.export.viewmodel
 
 import android.app.Application
+import androidx.work.WorkInfo
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import com.healthconnect.export.R
 import com.healthconnect.export.data.ExportConfig
 import com.healthconnect.export.data.ExportFrequency
@@ -29,6 +33,22 @@ class ScheduleManager(
     private val application: Application,
     private val onStateUpdate: (ExportUiState.() -> ExportUiState) -> Unit,
 ) {
+    init {
+        DailyExportWorker.getStatus(application).observeForever { infos ->
+            val active = infos.firstOrNull { !it.state.isFinished }
+            val status = when {
+                active == null -> ScheduleStatus.NotScheduled
+                active.state == WorkInfo.State.RUNNING -> ScheduleStatus.Running
+                active.nextScheduleTimeMillis == Long.MAX_VALUE -> ScheduleStatus.Scheduled("Pending")
+                else -> {
+                    val formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(ZoneId.systemDefault())
+                    ScheduleStatus.Scheduled("Next eligible run: ${formatter.format(Instant.ofEpochMilli(active.nextScheduleTimeMillis))}")
+                }
+            }
+            onStateUpdate { copy(scheduleStatus = status) }
+        }
+    }
+
     // Helper to get localized strings from resources
     private fun str(id: Int): String = application.getString(id)
 
@@ -94,7 +114,7 @@ class ScheduleManager(
                     if (config.frequency == ExportFrequency.MANUAL) {
                         ScheduleStatus.NotScheduled
                     } else {
-                        ScheduleStatus.Scheduled(str(R.string.next_run))
+                        ScheduleStatus.Scheduled("Scheduling…")
                     },
                 message =
                     if (showMessage && config.frequency != ExportFrequency.MANUAL) {
