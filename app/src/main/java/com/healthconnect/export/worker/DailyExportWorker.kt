@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.work.*
 import com.healthconnect.export.data.ExportConfig
 import com.healthconnect.export.data.ExportFrequency
-import com.healthconnect.export.data.HealthDataType
 import com.healthconnect.export.repository.GoogleDriveRepository
 import com.healthconnect.export.repository.HealthConnectRepository
 import com.healthconnect.export.repository.LocalExportRepository
@@ -16,7 +15,6 @@ import com.healthconnect.export.util.ExportForegroundNotifier
 import com.healthconnect.export.util.ExportSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.LocalDate
@@ -125,7 +123,12 @@ class DailyExportWorker(
     override suspend fun doWork(): Result =
         withContext(Dispatchers.IO) {
             val config = resolveConfig()
+            var stage = "start"
             try {
+                if (config.frequency == ExportFrequency.MANUAL) return@withContext Result.success()
+                DeliveryLog.recordStage(applicationContext, TRIGGER, "started; attempt=$runAttemptCount")
+                DeliveryLog.recordStage(applicationContext, TRIGGER, healthRepo.backgroundReadDiagnostic())
+                stage = "Health Connect"
                 // Best-effort only: Android 12+ refuses the promotion while the app
                 // runs in the background, and the background read permission is what
                 // makes the read legal there.
@@ -159,11 +162,17 @@ class DailyExportWorker(
                     return@withContext Result.success()
                 }
 
-                // Save locally
+                DeliveryLog.recordStage(applicationContext, TRIGGER, "Health Connect read complete")
+                stage = "local export"
                 val files = localRepo.saveRecords(records, config)
+                DeliveryLog.recordStage(applicationContext, TRIGGER, "local export complete: ${files.size} file(s)")
 
                 // Sync to Drive if enabled and signed in
-                if (config.autoSyncDrive && driveRepo.isSignedIn()) {
+                stage = "Drive"
+                if (config.autoSyncDrive && !driveRepo.isSignedIn()) {
+                    return@withContext DeliveryOutcome.failure(applicationContext, TRIGGER, "Drive not signed in", retry = false)
+                }
+                if (config.autoSyncDrive) {
                     val driveResults =
                         files.map { file ->
                             driveRepo.uploadFile(file, "HealthConnectExport/${file.name}")
@@ -172,12 +181,14 @@ class DailyExportWorker(
                         return@withContext DeliveryOutcome.failure(
                             applicationContext,
                             TRIGGER,
-                            "Drive upload failed",
+                            "Drive upload failed: ${driveResults.count { it == null }} of ${files.size} file(s); see Android log",
                             retry = true,
                         )
                     }
                 }
 
+                if (config.autoSyncDrive) DeliveryLog.recordStage(applicationContext, TRIGGER, "Drive upload complete")
+                stage = "webhook"
                 // Send to webhook if enabled
                 if (config.autoSendWebhook && config.webhookUrl.isNotBlank()) {
                     when (val result = webhookRepo.sendRecords(config.webhookUrl, recordsWithData, config.webhookAuthToken)) {
@@ -192,6 +203,8 @@ class DailyExportWorker(
                             )
                     }
                 } else {
+                    val destination = if (config.autoSyncDrive) "local + Drive" else "local"
+                    DeliveryLog.recordExportSuccess(applicationContext, TRIGGER, "$destination: ${files.size} file(s)")
                     Result.success()
                 }
             } catch (e: SecurityException) {
@@ -199,34 +212,11 @@ class DailyExportWorker(
                 // run would fail identically forever and never deliver anything.
                 DeliveryOutcome.permissionFailure(applicationContext, TRIGGER, healthRepo, e)
             } catch (e: IllegalStateException) {
-                DeliveryOutcome.failure(applicationContext, TRIGGER, "health connect: ${e.message}", retry = true)
+                DeliveryOutcome.failure(applicationContext, TRIGGER, "$stage: ${e.javaClass.simpleName}", retry = true)
             } catch (e: Exception) {
-                DeliveryOutcome.failure(applicationContext, TRIGGER, e.message ?: e.toString(), retry = true)
+                DeliveryOutcome.failure(applicationContext, TRIGGER, "$stage: ${e.javaClass.simpleName}", retry = true)
             }
         }
 
-    /**
-     * Input data carries the configuration snapshot taken when the job was
-     * enqueued; the webhook settings are refreshed from the persisted values so
-     * a URL/token changed (or cleared) later still applies to that job.
-     */
-    private fun resolveConfig(): ExportConfig {
-        val persisted = ExportSettings.loadConfig(applicationContext)
-        val base =
-            inputData.getString(KEY_CONFIG)?.let { configJson ->
-                runCatching { Json.decodeFromString<ExportConfig>(configJson) }.getOrNull()
-            } ?: ExportConfig(
-                enabledTypes = HealthDataType.entries.toSet(),
-                frequency = ExportFrequency.DAILY,
-                autoSyncDrive = true,
-            )
-        if (!ExportSettings.hasStoredWebhookUrl(applicationContext)) return base
-
-        return base.copy(
-            webhookUrl = persisted.webhookUrl,
-            webhookAuthToken = persisted.webhookAuthToken,
-            autoSendWebhook = if (ExportSettings.hasStoredAutoSendWebhook(applicationContext)) persisted.autoSendWebhook else base.autoSendWebhook,
-            autoSendWebhookEvery2Hours = persisted.autoSendWebhookEvery2Hours,
-        )
-    }
+    private fun resolveConfig(): ExportConfig = ExportSettings.loadConfig(applicationContext)
 }
