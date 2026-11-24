@@ -2,7 +2,7 @@ package com.healthconnect.export.viewmodel
 
 import android.app.Application
 import androidx.work.WorkInfo
-import androidx.lifecycle.asFlow
+import androidx.work.WorkManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -38,18 +38,18 @@ class ScheduleManager(
 ) {
     fun observeStatus(scope: CoroutineScope) {
         scope.launch {
-            DailyExportWorker.getStatus(application).asFlow().collect { infos ->
-            val active = infos.firstOrNull { !it.state.isFinished }
-            val status = when {
-                active == null -> ScheduleStatus.NotScheduled
-                active.state == WorkInfo.State.RUNNING -> ScheduleStatus.Running
-                active.nextScheduleTimeMillis == Long.MAX_VALUE -> ScheduleStatus.Scheduled("Pending")
-                else -> {
-                    val formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(ZoneId.systemDefault())
-                    ScheduleStatus.Scheduled("Next eligible run: ${formatter.format(Instant.ofEpochMilli(active.nextScheduleTimeMillis))}")
+            WorkManager.getInstance(application).getWorkInfosForUniqueWorkFlow(DailyExportWorker.WORK_NAME).collect { infos ->
+                val active = infos.firstOrNull { !it.state.isFinished }
+                val status = when {
+                    active == null -> ScheduleStatus.NotScheduled
+                    active.state == WorkInfo.State.RUNNING -> ScheduleStatus.Running
+                    active.nextScheduleTimeMillis == Long.MAX_VALUE -> ScheduleStatus.Scheduled("Pending")
+                    else -> {
+                        val formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(ZoneId.systemDefault())
+                        ScheduleStatus.Scheduled("Next eligible run: ${formatter.format(Instant.ofEpochMilli(active.nextScheduleTimeMillis))}")
+                    }
                 }
-            }
-            onStateUpdate { copy(scheduleStatus = status) }
+                onStateUpdate { copy(scheduleStatus = status) }
             }
         }
     }
