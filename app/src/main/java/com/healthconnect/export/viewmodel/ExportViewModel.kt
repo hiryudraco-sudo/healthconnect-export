@@ -206,6 +206,7 @@ class ExportViewModel(
         // Re-schedule the periodic export without popping a confirmation
         // snackbar at every app start.
         scheduleManager.scheduleExport(_uiState.value, showMessage = false)
+        scheduleManager.observeStatus(viewModelScope)
         // A configured background delivery cannot read anything without the
         // background-read permission, so ask for it right away instead of letting
         // the schedule run and fail silently.
