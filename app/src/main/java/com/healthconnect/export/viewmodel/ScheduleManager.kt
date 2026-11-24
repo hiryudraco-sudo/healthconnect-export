@@ -2,6 +2,9 @@ package com.healthconnect.export.viewmodel
 
 import android.app.Application
 import androidx.work.WorkInfo
+import androidx.lifecycle.asFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -33,8 +36,9 @@ class ScheduleManager(
     private val application: Application,
     private val onStateUpdate: (ExportUiState.() -> ExportUiState) -> Unit,
 ) {
-    init {
-        DailyExportWorker.getStatus(application).observeForever { infos ->
+    fun observeStatus(scope: CoroutineScope) {
+        scope.launch {
+            DailyExportWorker.getStatus(application).asFlow().collect { infos ->
             val active = infos.firstOrNull { !it.state.isFinished }
             val status = when {
                 active == null -> ScheduleStatus.NotScheduled
@@ -46,6 +50,7 @@ class ScheduleManager(
                 }
             }
             onStateUpdate { copy(scheduleStatus = status) }
+            }
         }
     }
 
