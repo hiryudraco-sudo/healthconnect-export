@@ -104,7 +104,10 @@ sealed class DriveStatus {
 
 class ExportViewModel(
     application: Application,
+    statusSource: ScheduleStatusSource,
 ) : AndroidViewModel(application) {
+    constructor(application: Application) : this(application, WorkManagerScheduleStatusSource(application))
+
     /** Scope for export operations. Made internal for testability. */
     internal var exportScope: CoroutineScope = viewModelScope
 
@@ -129,7 +132,7 @@ class ExportViewModel(
             healthRepo = healthRepo,
         )
     val scheduleManager =
-        ScheduleManager(getApplication()) { update ->
+        ScheduleManager(getApplication(), statusSource) { update ->
             _uiState.update(update)
         }
 
