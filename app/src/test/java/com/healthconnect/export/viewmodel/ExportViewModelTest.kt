@@ -138,7 +138,7 @@ class ExportViewModelTest {
         WorkManagerTestInitHelper.initializeTestWorkManager(mockApp, config)
 
         // Create ViewModel (init block runs here)
-        viewModel = ExportViewModel(mockApp)
+        viewModel = ExportViewModel(mockApp, ScheduleStatusSource { kotlinx.coroutines.flow.emptyFlow() })
 
         // Use test dispatcher for DriveManager's async operations
         viewModel.driveManager.scope = CoroutineScope(testDispatcher)
