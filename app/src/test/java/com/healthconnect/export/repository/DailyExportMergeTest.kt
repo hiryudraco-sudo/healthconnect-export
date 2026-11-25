@@ -40,6 +40,16 @@ class DailyExportMergeTest {
         assertEquals("fit", sources.getValue("distance").toString().trim('[',']','"'))
     }
 
+
+    @Test
+    fun `lower record count cannot overwrite a more complete day`() {
+        val previous = """{"date":"2026-11-24","steps":{"total_steps":2703,"records_count":53},"metadata":{"export_timestamp":"old"}}"""
+        val partial = """{"date":"2026-11-24","steps":{"total_steps":100,"records_count":2},"metadata":{"export_timestamp":"new"}}"""
+        val merged = json.parseToJsonElement(DailyExportMerge.merge(previous, partial)).jsonObject
+        assertEquals("2703", merged.getValue("steps").jsonObject.getValue("total_steps").jsonPrimitive.content)
+        assertEquals("53", merged.getValue("steps").jsonObject.getValue("records_count").jsonPrimitive.content)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `different dates are never merged`() {
         DailyExportMerge.merge(
