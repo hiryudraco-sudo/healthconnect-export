@@ -827,7 +827,30 @@ class HealthConnectRepository(
         byDay.forEach { (dateStr, records) ->
             // Only reachable if the caller seeded daysMap with a different window.
             val existing = daysMap[dateStr] ?: return@forEach
-            daysMap[dateStr] = handler.updateRecord(existing, handler.extract(records, selectedSourcePackage))
+            val contributingRecords =
+                when (type) {
+                    HealthDataType.STEPS,
+                    HealthDataType.CALORIES,
+                    HealthDataType.DISTANCE,
+                    HealthDataType.FLOORS_CLIMBED,
+                    HealthDataType.ACTIVE_CALORIES,
+                    -> filterByPreferredOrigin(records, selectedSourcePackage)
+                    HealthDataType.HEART_RATE -> records.filter { (it as HeartRateRecord).samples.isNotEmpty() }
+                    HealthDataType.SPEED -> records.filter { (it as SpeedRecord).samples.isNotEmpty() }
+                    HealthDataType.MENSTRUATION -> records.take(1)
+                    else -> records
+                }
+            val extracted = handler.extract(records, selectedSourcePackage)
+            val updated = handler.updateRecord(existing, extracted)
+            val provenance = existing.provenance
+            daysMap[dateStr] =
+                if (extracted != null && provenance != null) {
+                    val key = if (type == HealthDataType.EXERCISE) "exercises" else type.name.lowercase(java.util.Locale.ROOT)
+                    val sources = contributingRecords.map { sourceOf(it) }.distinct().sorted()
+                    updated.copy(provenance = provenance.copy(sourcesByType = provenance.sourcesByType + (key to sources)))
+                } else {
+                    updated
+                }
         }
 
         Log.d(TAG, "readPeriodInBatch ${type.name}: total=${allRecords.size}, days=${byDay.size}")
@@ -892,6 +915,10 @@ class HealthConnectRepository(
                     DailyHealthRecord(
                         date = current.toString(),
                         metadata = metadata,
+                        provenance = com.healthconnect.export.data.ExportProvenance(
+                            selectionMode = if (selectedSourcePackage.isNullOrBlank()) "auto" else "explicit",
+                            selectedSource = selectedSourcePackage?.takeIf { it.isNotBlank() },
+                        ),
                     )
                 current = current.plusDays(1)
             }
