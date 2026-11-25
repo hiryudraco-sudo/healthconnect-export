@@ -77,13 +77,38 @@ class LocalExportRepository(
             val date = LocalDate.parse(record.date)
             val file = File(dir, getFilenameForDate(date, config.exportFormat))
             val counterpartFormat = if (config.exportFormat == ExportFormat.JSON) ExportFormat.CSV else ExportFormat.JSON
-            File(dir, getFilenameForDate(date, counterpartFormat)).delete()
             val content =
                 when (config.exportFormat) {
                     ExportFormat.JSON -> json.encodeToString(record)
                     ExportFormat.CSV -> CsvMapper.header() + "\n" + CsvMapper.recordToCsv(record)
                 }
-            file.writeText(content)
+            val protectedContent =
+                if (config.exportFormat == ExportFormat.JSON && file.exists() && file.length() > 0) {
+                    DailyExportMerge.merge(file.readText(), content)
+                } else {
+                    content
+                }
+            // Write through a temporary file; failure must leave the previous file intact.
+            val temporary = File.createTempFile("health_", ".tmp", dir)
+            try {
+                temporary.writeText(protectedContent)
+                if (!temporary.renameTo(file)) {
+                    // Android renameTo may not replace existing files on every filesystem.
+                    // Keep the original intact rather than deleting it first.
+                    if (file.exists()) {
+                        java.nio.file.Files.move(
+                            temporary.toPath(), file.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        )
+                    } else {
+                        error("Could not publish daily export")
+                    }
+                }
+            } finally {
+                if (temporary.exists()) temporary.delete()
+            }
+            File(dir, getFilenameForDate(date, counterpartFormat)).delete()
             file
         }
 
