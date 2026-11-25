@@ -119,7 +119,7 @@ class GoogleDriveRepository(
 
         val mediaContent = FileContent(mimeTypeFor(localFile), localFile)
 
-        // Delete all existing files with the same name before creating a new one
+        // Update in place: never delete a valid remote export before uploading.
         val existingFiles =
             drive
                 .files()
@@ -129,18 +129,18 @@ class GoogleDriveRepository(
                 .execute()
                 .files
 
-        if (existingFiles.isNotEmpty()) {
-            Log.i(TAG, "uploadFile: deleting ${existingFiles.size} existing file(s) for ${localFile.name}")
-            existingFiles.forEach { file ->
-                drive.files().delete(file.id).execute()
-                Log.i(TAG, "uploadFile: deleted existing file ${file.id}")
-            }
-        } else {
-            Log.i(TAG, "uploadFile: no existing file to overwrite, creating new")
+        if (existingFiles.size > 1) {
+            Log.w(TAG, "uploadFile: duplicate remote files for ${localFile.name}; refusing ambiguous update")
+            return null
         }
 
-        // Always create a new file
-        val driveFile = drive.files().create(fileMetadata, mediaContent).execute()
+        val existing = existingFiles.firstOrNull()
+        val driveFile =
+            if (existing == null) {
+                drive.files().create(fileMetadata, mediaContent).execute()
+            } else {
+                drive.files().update(existing.id, com.google.api.services.drive.model.File(), mediaContent).execute()
+            }
 
         Log.i(TAG, "uploadFile: success - ${driveFile.id}")
         return driveFile.id
