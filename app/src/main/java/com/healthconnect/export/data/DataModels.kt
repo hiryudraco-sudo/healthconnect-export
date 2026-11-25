@@ -92,6 +92,7 @@ data class DailyHealthRecord(
     @SerialName("speed") val speed: SpeedData? = null,
     @SerialName("menstruation") val menstruation: MenstruationData? = null,
     @SerialName("metadata") val metadata: ExportMetadata,
+    @SerialName("provenance") val provenance: ExportProvenance? = null,
 ) {
     /**
      * True when at least one section carries a value.
@@ -279,6 +280,13 @@ data class MenstruationData(
 data class SpeedData(
     @SerialName("avg_speed_meters_per_second") val avgSpeedMetersPerSecond: Double? = null,
     @SerialName("records_count") val recordsCount: Int = 0,
+)
+
+@Serializable
+data class ExportProvenance(
+    @SerialName("selection_mode") val selectionMode: String,
+    @SerialName("selected_source") val selectedSource: String? = null,
+    @SerialName("sources_by_type") val sourcesByType: Map<String, List<String>> = emptyMap(),
 )
 
 @Serializable
