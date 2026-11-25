@@ -117,8 +117,6 @@ class GoogleDriveRepository(
                 mimeType = mimeTypeFor(localFile)
             }
 
-        val mediaContent = FileContent(mimeTypeFor(localFile), localFile)
-
         // Update in place: never delete a valid remote export before uploading.
         val existingFiles =
             drive
@@ -135,15 +133,34 @@ class GoogleDriveRepository(
         }
 
         val existing = existingFiles.firstOrNull()
-        val driveFile =
-            if (existing == null) {
-                drive.files().create(fileMetadata, mediaContent).execute()
-            } else {
-                drive.files().update(existing.id, com.google.api.services.drive.model.File(), mediaContent).execute()
-            }
-
-        Log.i(TAG, "uploadFile: success - ${driveFile.id}")
-        return driveFile.id
+        var mergedTemp: File? = null
+        try {
+            val uploadSource =
+                if (existing != null && localFile.extension.equals("json", ignoreCase = true)) {
+                    val previous =
+                        drive.files().get(existing.id).executeMediaAsInputStream().bufferedReader().use { it.readText() }
+                    // Invalid or mismatched remote JSON aborts this upload rather than
+                    // discarding a previously valid Drive file.
+                    val merged = DailyExportMerge.merge(previous, localFile.readText())
+                    File.createTempFile("health_merge_", ".json", context.cacheDir).also {
+                        mergedTemp = it
+                        it.writeText(merged)
+                    }
+                } else {
+                    localFile
+                }
+            val mediaContent = FileContent(mimeTypeFor(uploadSource), uploadSource)
+            val driveFile =
+                if (existing == null) {
+                    drive.files().create(fileMetadata, mediaContent).execute()
+                } else {
+                    drive.files().update(existing.id, com.google.api.services.drive.model.File(), mediaContent).execute()
+                }
+            Log.i(TAG, "uploadFile: success - ${driveFile.id}")
+            return driveFile.id
+        } finally {
+            mergedTemp?.delete()
+        }
     }
 
     private fun mimeTypeFor(file: File): String =
