@@ -142,7 +142,7 @@ class GoogleDriveRepository(
                     // Invalid or mismatched remote JSON aborts this upload rather than
                     // discarding a previously valid Drive file.
                     val merged = DailyExportMerge.merge(previous, localFile.readText())
-                    File.createTempFile("health_merge_", ".json", context.cacheDir).also {
+                    File.createTempFile("health_merge_", ".json", context.cacheDir ?: localFile.absoluteFile.parentFile).also {
                         mergedTemp = it
                         it.writeText(merged)
                     }
