@@ -23,7 +23,7 @@ import java.time.temporal.ChronoUnit
 import java.util.concurrent.TimeUnit
 
 /**
- * Background worker that exports yesterday's health data and optionally syncs to Drive
+ * Background worker that exports the last seven completed days of health data and optionally syncs to Drive
  */
 class DailyExportWorker(
     context: Context,
@@ -139,7 +139,7 @@ class DailyExportWorker(
                 val endDate = LocalDate.now().minusDays(1)
                 val startDate =
                     when (config.frequency) {
-                        ExportFrequency.DAILY -> endDate
+                        ExportFrequency.DAILY -> endDate.minusDays(6)
                         ExportFrequency.WEEKLY -> endDate.minusDays(6)
                         ExportFrequency.MANUAL -> endDate
                     }
@@ -164,7 +164,7 @@ class DailyExportWorker(
 
                 DeliveryLog.recordStage(applicationContext, TRIGGER, "Health Connect read complete")
                 stage = "local export"
-                val files = localRepo.saveRecords(records, config)
+                val files = localRepo.saveRecords(recordsWithData, config)
                 DeliveryLog.recordStage(applicationContext, TRIGGER, "local export complete: ${files.size} file(s)")
 
                 // Sync to Drive if enabled and signed in
