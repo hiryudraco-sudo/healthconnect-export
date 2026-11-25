@@ -40,12 +40,22 @@ internal object DailyExportMerge {
         val result = old.toMutableMap()
         // Preserve unknown fields for forwards compatibility.
         result.putAll(fresh)
+        val retainedKeys = mutableSetOf<String>()
         for (key in metrics) {
             val replacement = fresh[key]
-            val isMissing = replacement == null ||
-                replacement is JsonPrimitive && replacement.isString.not() && replacement.content == "null"
-            if (isMissing && old[key] != null) {
-                result[key] = old.getValue(key)
+            val oldValue = old[key]
+            val isMissing = replacement == null || replacement.toString() == "null"
+            val oldCount = (oldValue as? JsonObject)?.get("records_count")
+                ?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            val newCount = (replacement as? JsonObject)?.get("records_count")
+                ?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            // A lower record count can indicate a partial Health Connect sync.
+            // Retain last-known data, at the cost of not reflecting deliberate
+            // deletions until a more complete snapshot is observed.
+            val isIncomplete = oldCount != null && newCount != null && newCount < oldCount
+            if ((isMissing || isIncomplete) && oldValue != null) {
+                result[key] = oldValue
+                retainedKeys.add(key)
             }
         }
 
@@ -56,7 +66,7 @@ internal object DailyExportMerge {
             val newSources = newProvenance?.get("sources_by_type") as? JsonObject
             val sources = mutableMapOf<String, kotlinx.serialization.json.JsonElement>()
             for (key in metrics) {
-                val isFresh = fresh[key] != null && fresh[key].toString() != "null"
+                val isFresh = fresh[key] != null && fresh[key].toString() != "null" && key !in retainedKeys
                 val source = if (isFresh) newSources?.get(key) else oldSources?.get(key)
                 if (source != null) sources[key] = source
             }
