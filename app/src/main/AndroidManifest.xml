@@ -73,9 +73,9 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/ic_vitalink"
+        android:icon="@drawable/vitalink_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/ic_vitalink"
+        android:roundIcon="@drawable/vitalink_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.HealthConnectExport"
         tools:targetApi="37">
