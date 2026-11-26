@@ -290,63 +290,43 @@ class GoogleDriveRepositoryTest {
     }
 
     @Test
-    fun `uploadFile deletes existing file then creates new one`() {
+    fun `uploadFile updates an existing JSON preserving its id`() {
         runBlocking {
-
-            // First execute (findFolder): returns existing folder
-            // Second execute (check existing files): returns existing file
-            whenever(mockFiles.list()).thenReturn(mockListRequest)
-            whenever(mockListRequest.execute()).thenReturn(
-                mockFolderListResponse, // folder found
-                mockFileListResponse, // existing file found
-            )
-
-            whenever(mockFiles.create(any(), any())).thenReturn(mockCreateRequest)
-            whenever(mockCreateRequest.execute()).thenReturn(mockCreatedFile)
-
-            val result = repoSpy.uploadFile(localTestFile, "HealthConnectExport/test.json")
-
-            assertEquals("new_file_id", result)
-            // Existing file was deleted first
-            verify(mockFiles).delete(eq("existing_file_id"))
-            verify(mockDeleteRequest).execute()
-            // Then new file was created
-            verify(mockFiles).create(any(), any())
-            verify(mockFiles, never()).update(any(), any(), any())
+            val local = File.createTempFile("health_2026-11-24", ".json")
+            try {
+                local.writeText("""{"date":"2026-11-24","steps":{"total_steps":42},"metadata":{}}""")
+                whenever(mockFiles.list()).thenReturn(mockListRequest)
+                whenever(mockListRequest.execute()).thenReturn(mockFolderListResponse, mockFileListResponse)
+                val getRequest = mock<Drive.Files.Get>()
+                whenever(mockFiles.get("existing_file_id")).thenReturn(getRequest)
+                whenever(getRequest.executeMediaAsInputStream()).thenReturn(
+                    """{"date":"2026-11-24","distance":{"total_distance_meters":100},"metadata":{}}""".byteInputStream(),
+                )
+                whenever(mockFiles.update(eq("existing_file_id"), any(), any())).thenReturn(mockUpdateRequest)
+                val result = repoSpy.uploadFile(local, "HealthConnectExport/${local.name}")
+                assertEquals("updated_file_id", result)
+                verify(mockFiles, never()).delete(any())
+                verify(mockFiles, never()).create(any(), any())
+                verify(mockFiles).update(eq("existing_file_id"), any(), any())
+            } finally {
+                local.delete()
+            }
         }
     }
 
     @Test
-    fun `uploadFile deletes multiple existing files then creates new one`() {
+    fun `uploadFile refuses ambiguous duplicates without deleting anything`() {
         runBlocking {
-
             val file1 = mock<com.google.api.services.drive.model.File>()
-            whenever(file1.id).thenReturn("file_1_id")
             val file2 = mock<com.google.api.services.drive.model.File>()
-            whenever(file2.id).thenReturn("file_2_id")
             val multiFileResponse = mock<com.google.api.services.drive.model.FileList>()
             whenever(multiFileResponse.files).thenReturn(listOf(file1, file2))
-
-            // First execute (findFolder): returns existing folder
-            // Second execute (check existing files): returns multiple files
             whenever(mockFiles.list()).thenReturn(mockListRequest)
-            whenever(mockListRequest.execute()).thenReturn(
-                mockFolderListResponse, // folder found
-                multiFileResponse, // multiple existing files
-            )
-
-            whenever(mockFiles.create(any(), any())).thenReturn(mockCreateRequest)
-            whenever(mockCreateRequest.execute()).thenReturn(mockCreatedFile)
-
+            whenever(mockListRequest.execute()).thenReturn(mockFolderListResponse, multiFileResponse)
             val result = repoSpy.uploadFile(localTestFile, "HealthConnectExport/test.json")
-
-            assertEquals("new_file_id", result)
-            // Both existing files were deleted
-            verify(mockFiles, times(2)).delete(any())
-            verify(mockFiles).delete(eq("file_1_id"))
-            verify(mockFiles).delete(eq("file_2_id"))
-            // Then new file was created
-            verify(mockFiles).create(any(), any())
+            assertNull(result)
+            verify(mockFiles, never()).delete(any())
+            verify(mockFiles, never()).create(any(), any())
             verify(mockFiles, never()).update(any(), any(), any())
         }
     }
@@ -522,25 +502,18 @@ class GoogleDriveRepositoryTest {
     }
 
     @Test
-    fun `uploadFile returns null when existing file delete throws`() {
+    fun `uploadFile retains remote file if the existing JSON cannot be read`() {
         runBlocking {
-
             whenever(mockFiles.list()).thenReturn(mockListRequest)
-            whenever(mockListRequest.execute()).thenReturn(
-                mockFolderListResponse, // folder found
-                mockFileListResponse, // existing file found
-            )
-
-            // Delete throws — should be caught and return null
-            whenever(mockFiles.delete(any())).thenReturn(mockDeleteRequest)
-            whenever(mockDeleteRequest.execute()).thenThrow(RuntimeException("Delete failed"))
-
+            whenever(mockListRequest.execute()).thenReturn(mockFolderListResponse, mockFileListResponse)
+            val getRequest = mock<Drive.Files.Get>()
+            whenever(mockFiles.get("existing_file_id")).thenReturn(getRequest)
+            whenever(getRequest.executeMediaAsInputStream()).thenThrow(RuntimeException("Drive download failed"))
             val result = repoSpy.uploadFile(localTestFile, "HealthConnectExport/test.json")
-
             assertNull(result)
-            verify(mockFiles).delete(eq("existing_file_id"))
-            // Create should NOT be called since delete failed
+            verify(mockFiles, never()).delete(any())
             verify(mockFiles, never()).create(any(), any())
+            verify(mockFiles, never()).update(any(), any(), any())
         }
     }
 

@@ -1,12 +1,21 @@
 package com.healthconnect.export.viewmodel
 
 import android.app.Application
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.healthconnect.export.R
 import com.healthconnect.export.data.ExportConfig
 import com.healthconnect.export.data.ExportFrequency
 import com.healthconnect.export.util.ExportSettings
 import com.healthconnect.export.worker.DailyExportWorker
 import com.healthconnect.export.worker.DeliveryWatchdog
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 /**
  * Manages schedule-related logic for health data export.
@@ -25,10 +34,44 @@ sealed class ScheduleStatus {
     object Running : ScheduleStatus()
 }
 
+fun interface ScheduleStatusSource {
+    fun observe(): Flow<ScheduleStatus>
+}
+
+class WorkManagerScheduleStatusSource(
+    private val application: Application,
+) : ScheduleStatusSource {
+    override fun observe(): Flow<ScheduleStatus> =
+        WorkManager
+            .getInstance(application)
+            .getWorkInfosForUniqueWorkFlow(DailyExportWorker.WORK_NAME)
+            .map { infos ->
+                val active = infos.firstOrNull { !it.state.isFinished }
+                when {
+                    active == null -> ScheduleStatus.NotScheduled
+                    active.state == WorkInfo.State.RUNNING -> ScheduleStatus.Running
+                    active.nextScheduleTimeMillis == Long.MAX_VALUE -> ScheduleStatus.Scheduled("Pending")
+                    else -> {
+                        val formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(ZoneId.systemDefault())
+                        ScheduleStatus.Scheduled("Next eligible run: ${formatter.format(Instant.ofEpochMilli(active.nextScheduleTimeMillis))}")
+                    }
+                }
+            }
+}
+
 class ScheduleManager(
     private val application: Application,
+    private val statusSource: ScheduleStatusSource = WorkManagerScheduleStatusSource(application),
     private val onStateUpdate: (ExportUiState.() -> ExportUiState) -> Unit,
 ) {
+    fun observeStatus(scope: CoroutineScope) {
+        scope.launch {
+            statusSource.observe().collect { status ->
+                onStateUpdate { copy(scheduleStatus = status) }
+            }
+        }
+    }
+
     // Helper to get localized strings from resources
     private fun str(id: Int): String = application.getString(id)
 
@@ -84,7 +127,7 @@ class ScheduleManager(
         showMessage: Boolean = true,
     ) {
         val config = buildConfig(state)
-        DailyExportWorker.schedule(application, config)
+        DailyExportWorker.schedule(application, config, reanchor = showMessage)
         // The watchdog alarm is an independent trigger: it survives Doze and OEM
         // background restrictions, where the periodic job alone can be starved.
         DeliveryWatchdog.armAlarm(application)
@@ -94,7 +137,7 @@ class ScheduleManager(
                     if (config.frequency == ExportFrequency.MANUAL) {
                         ScheduleStatus.NotScheduled
                     } else {
-                        ScheduleStatus.Scheduled(str(R.string.next_run))
+                        ScheduleStatus.Scheduled("Scheduling…")
                     },
                 message =
                     if (showMessage && config.frequency != ExportFrequency.MANUAL) {
@@ -121,12 +164,16 @@ class ScheduleManager(
     }
 
     /**
-     * Cancels and re-creates the periodic export so that changes to the
+     * Replaces the periodic export so that changes to the
      * schedule (e.g. the time of day) take effect immediately. Silent — no
      * confirmation snackbar.
      */
     fun rescheduleExport(state: ExportUiState) {
-        DailyExportWorker.cancel(application)
-        scheduleExport(state, showMessage = false)
+        val config = buildConfig(state)
+        DailyExportWorker.schedule(application, config, reanchor = true)
+        DeliveryWatchdog.armAlarm(application)
+        onStateUpdate {
+            copy(scheduleStatus = ScheduleStatus.Scheduled("Scheduling…"))
+        }
     }
 }

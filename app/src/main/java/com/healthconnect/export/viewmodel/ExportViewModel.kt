@@ -104,7 +104,10 @@ sealed class DriveStatus {
 
 class ExportViewModel(
     application: Application,
+    statusSource: ScheduleStatusSource,
 ) : AndroidViewModel(application) {
+    constructor(application: Application) : this(application, WorkManagerScheduleStatusSource(application))
+
     /** Scope for export operations. Made internal for testability. */
     internal var exportScope: CoroutineScope = viewModelScope
 
@@ -129,7 +132,7 @@ class ExportViewModel(
             healthRepo = healthRepo,
         )
     val scheduleManager =
-        ScheduleManager(getApplication()) { update ->
+        ScheduleManager(getApplication(), statusSource) { update ->
             _uiState.update(update)
         }
 
@@ -206,6 +209,7 @@ class ExportViewModel(
         // Re-schedule the periodic export without popping a confirmation
         // snackbar at every app start.
         scheduleManager.scheduleExport(_uiState.value, showMessage = false)
+        scheduleManager.observeStatus(viewModelScope)
         // A configured background delivery cannot read anything without the
         // background-read permission, so ask for it right away instead of letting
         // the schedule run and fail silently.

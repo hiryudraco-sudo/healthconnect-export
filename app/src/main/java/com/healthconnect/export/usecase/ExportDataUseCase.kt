@@ -93,10 +93,9 @@ class ExportDataUseCase(
                 // 2. Permissions
                 val hasPermissions = healthRepo.checkPermissions(config.enabledTypes)
                 if (!hasPermissions) {
-                    // The background read permission is requested together with the
-                    // per-type ones: it is optional for a manual export, but scheduled
-                    // delivery cannot read anything without it on Android 14+.
-                    val permissions = healthRepo.getPermissionsForTypes(config.enabledTypes, includeBackgroundRead = true)
+                    // Manual exports only request permissions for the selected data types.
+                    // Background read access is handled separately for scheduled delivery.
+                    val permissions = healthRepo.getPermissionsForTypes(config.enabledTypes)
                     emit(ExportStep.PermissionsRequired(permissions))
                     return@flow
                 }

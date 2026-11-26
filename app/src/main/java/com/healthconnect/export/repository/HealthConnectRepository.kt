@@ -2,6 +2,7 @@ package com.healthconnect.export.repository
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.annotation.VisibleForTesting
@@ -106,7 +107,7 @@ class HealthConnectRepository(
      * Возвращает ActivityResultContract для запроса разрешений Health Connect
      */
     fun createPermissionRequestContract(): ActivityResultContract<Set<String>, Set<String>> =
-        PermissionController.createRequestPermissionResultContract(context.packageName)
+        PermissionController.createRequestPermissionResultContract()
 
     /**
      * Возвращает набор Health Connect разрешений для указанных типов данных
@@ -160,16 +161,24 @@ class HealthConnectRepository(
      * Android 14+ it reflects the user-granted `READ_HEALTH_DATA_IN_BACKGROUND`
      * permission, which the scheduled workers need to read anything at all.
      */
+    suspend fun backgroundReadDiagnostic(): String {
+        val c = client ?: return "Health Connect client unavailable"
+        val feature = runCatching {
+            c.features.getFeatureStatus(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
+        }.getOrNull()
+        val granted = runCatching {
+            c.permissionController.getGrantedPermissions().contains(BACKGROUND_READ_PERMISSION)
+        }.getOrNull()
+        return "SDK=${android.os.Build.VERSION.SDK_INT}, background feature=$feature, granted=$granted"
+    }
+
     suspend fun hasBackgroundReadPermission(): Boolean {
         val c = client ?: return false
         val featureStatus =
             runCatching {
                 c.features.getFeatureStatus(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
             }.getOrNull()
-        if (featureStatus != null && featureStatus != HealthConnectFeatures.FEATURE_STATUS_AVAILABLE) {
-            return true
-        }
-        if (featureStatus == null) return true
+        if (featureStatus != HealthConnectFeatures.FEATURE_STATUS_AVAILABLE) return false
         return runCatching {
             c.permissionController.getGrantedPermissions().contains(BACKGROUND_READ_PERMISSION)
         }.getOrDefault(false)
@@ -251,6 +260,8 @@ class HealthConnectRepository(
     ): List<T> {
         val c = client ?: return emptyList()
         val allRecords = mutableListOf<T>()
+        val seenIds = mutableSetOf<String>()
+        val seenPageTokens = mutableSetOf<String>()
         var pageToken: String? = null
         var pageCount = 0
         val maxPages = 100 // Safety limit to prevent infinite loops
@@ -278,12 +289,28 @@ class HealthConnectRepository(
                 Log.w(TAG, "readAllPages: empty page with non-null pageToken, stopping")
                 break
             }
-            allRecords.addAll(response.records)
-            pageToken = response.pageToken
+            val newRecords =
+                response.records.filter { record ->
+                    val id = record.metadata.id
+                    id.isBlank() || seenIds.add(id)
+                }
+            val duplicates = recordsOnPage - newRecords.size
             Log.d(
                 TAG,
-                "readAllPages(${request.recordType.simpleName}): page=$pageCount, got=$recordsOnPage, total=${allRecords.size}, nextToken=$pageToken",
+                "readAllPages($typeName): page=$pageCount, received=$recordsOnPage, " +
+                    "uniqueOnPage=${newRecords.size}, duplicates=$duplicates, totalUnique=${allRecords.size + newRecords.size}",
             )
+            if (recordsOnPage > 0 && newRecords.isEmpty()) {
+                Log.w(TAG, "readAllPages($typeName): page contains only previously seen records; stopping")
+                break
+            }
+            allRecords.addAll(newRecords)
+            val nextToken = response.pageToken
+            if (nextToken != null && (nextToken == pageToken || !seenPageTokens.add(nextToken))) {
+                Log.w(TAG, "readAllPages($typeName): repeated pagination token; stopping")
+                break
+            }
+            pageToken = nextToken
         } while (pageToken != null)
         return allRecords
     }
@@ -800,7 +827,30 @@ class HealthConnectRepository(
         byDay.forEach { (dateStr, records) ->
             // Only reachable if the caller seeded daysMap with a different window.
             val existing = daysMap[dateStr] ?: return@forEach
-            daysMap[dateStr] = handler.updateRecord(existing, handler.extract(records, selectedSourcePackage))
+            val contributingRecords =
+                when (type) {
+                    HealthDataType.STEPS,
+                    HealthDataType.CALORIES,
+                    HealthDataType.DISTANCE,
+                    HealthDataType.FLOORS_CLIMBED,
+                    HealthDataType.ACTIVE_CALORIES,
+                    -> filterByPreferredOrigin(records, selectedSourcePackage)
+                    HealthDataType.HEART_RATE -> records.filter { (it as HeartRateRecord).samples.isNotEmpty() }
+                    HealthDataType.SPEED -> records.filter { (it as SpeedRecord).samples.isNotEmpty() }
+                    HealthDataType.MENSTRUATION -> records.take(1)
+                    else -> records
+                }
+            val extracted = handler.extract(records, selectedSourcePackage)
+            val updated = handler.updateRecord(existing, extracted)
+            val provenance = existing.provenance
+            daysMap[dateStr] =
+                if (extracted != null && provenance != null) {
+                    val key = if (type == HealthDataType.EXERCISE) "exercises" else type.name.lowercase(java.util.Locale.ROOT)
+                    val sources = contributingRecords.map { sourceOf(it) }.distinct().sorted()
+                    updated.copy(provenance = provenance.copy(sourcesByType = provenance.sourcesByType + (key to sources)))
+                } else {
+                    updated
+                }
         }
 
         Log.d(TAG, "readPeriodInBatch ${type.name}: total=${allRecords.size}, days=${byDay.size}")
@@ -865,6 +915,10 @@ class HealthConnectRepository(
                     DailyHealthRecord(
                         date = current.toString(),
                         metadata = metadata,
+                        provenance = com.healthconnect.export.data.ExportProvenance(
+                            selectionMode = if (selectedSourcePackage.isNullOrBlank()) "auto" else "explicit",
+                            selectedSource = selectedSourcePackage?.takeIf { it.isNotBlank() },
+                        ),
                     )
                 current = current.plusDays(1)
             }

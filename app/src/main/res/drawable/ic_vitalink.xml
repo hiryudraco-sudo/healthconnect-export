@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vitalink launcher icon: vector adaptation of the approved health / steps / upload artwork.
+     108dp canvas keeps the complete symbol legible on Android launchers. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Deep navy rounded tile -->
+    <path
+        android:fillColor="#06162F"
+        android:pathData="M17,2 H91 C100,2 106,8 106,17 V91 C106,100 100,106 91,106 H17 C8,106 2,100 2,91 V17 C2,8 8,2 17,2 Z" />
+    <!-- Orbit around the personal health activity emblem -->
+    <path
+        android:pathData="M25,58 C7,75 14,93 40,94 C64,95 91,79 96,56 C98,47 94,40 86,38"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#13E4CF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <!-- Medical cross silhouette -->
+    <path
+        android:pathData="M46,24 C46,21 48,19 51,19 H60 C63,19 65,21 65,24 V38 H78 C81,38 83,40 83,43 V56 C83,59 81,61 78,61 H65 V75 C65,78 63,80 60,80 H51 C48,80 46,78 46,75 V61 H32 C29,61 27,59 27,56 V43 C27,40 29,38 32,38 H46 Z"
+        android:fillColor="#08364B"
+        android:strokeColor="#13DDC6"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round" />
+    <!-- ECG -->
+    <path
+        android:pathData="M32,50 L45,50 L50,39 L56,60 L61,46 L65,50 L77,50"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#F2FCFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Stylised footsteps; deliberately chunky at launcher sizes -->
+    <group android:rotation="29" android:pivotX="47" android:pivotY="78">
+        <path android:fillColor="#EAFBFF"
+            android:pathData="M42,74 C39,72 38,76 39,81 C40,85 44,87 47,85 C50,83 50,78 47,75 C45,73 43,73 42,74 Z" />
+        <path android:fillColor="#D6F6FD"
+            android:pathData="M58,67 C55,65 53,70 54,74 C55,79 59,81 62,79 C65,77 65,72 62,69 C61,67 59,66 58,67 Z" />
+    </group>
+    <path android:fillColor="#ACF9F0"
+        android:pathData="M26,85 C31,88 34,89 37,89 L37,92 C31,92 26,90 23,88 Z" />
+    <!-- Export arrow and tray at top right -->
+    <path
+        android:pathData="M81,18 L88,11 L95,18 M88,12 L88,29"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#F1FCFF"
+        android:strokeWidth="4.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M76,29 V33 C76,36 78,38 81,38 H95 C98,38 100,36 100,33 V29"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#D1F5FC"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round" />
+</vector>

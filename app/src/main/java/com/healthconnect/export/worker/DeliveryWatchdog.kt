@@ -47,9 +47,9 @@ object DeliveryWatchdog {
      * Re-enqueues the periodic jobs from the persisted settings and re-arms the
      * alarm. Safe to call repeatedly (unique work + `UPDATE`/`REPLACE`).
      */
-    fun ensureScheduled(context: Context) {
+    fun ensureScheduled(context: Context, reanchor: Boolean = false) {
         val config = ExportSettings.loadConfig(context)
-        DailyExportWorker.schedule(context, config)
+        DailyExportWorker.schedule(context, config, reanchor = reanchor)
         armAlarm(context)
     }
 

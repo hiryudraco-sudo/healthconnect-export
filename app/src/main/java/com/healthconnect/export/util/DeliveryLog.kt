@@ -127,6 +127,30 @@ object DeliveryLog {
         append(context, formatLine(now, trigger, "idle: $detail"))
     }
 
+    /** Local/Drive success must not advance the webhook catch-up cursor. */
+    fun recordExportSuccess(
+        context: Context,
+        trigger: String,
+        detail: String,
+    ) {
+        val now = System.currentTimeMillis()
+        prefs(context)
+            .edit()
+            .putLong(KEY_LAST_ATTEMPT_AT, now)
+            .putString(KEY_LAST_ATTEMPT_RESULT, "ok: $detail")
+            .putLong(KEY_LAST_SUCCESS_AT, now)
+            .apply()
+        append(context, formatLine(now, trigger, "ok: $detail"))
+    }
+
+    fun recordStage(
+        context: Context,
+        trigger: String,
+        detail: String,
+    ) {
+        append(context, formatLine(System.currentTimeMillis(), trigger, detail))
+    }
+
     fun clear(context: Context) {
         prefs(context)
             .edit()
@@ -138,6 +162,7 @@ object DeliveryLog {
             .apply()
     }
 
+    @Synchronized
     private fun append(
         context: Context,
         line: String,

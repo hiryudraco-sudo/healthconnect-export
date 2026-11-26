@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.work.*
 import com.healthconnect.export.data.ExportConfig
 import com.healthconnect.export.data.ExportFrequency
-import com.healthconnect.export.data.HealthDataType
 import com.healthconnect.export.repository.GoogleDriveRepository
 import com.healthconnect.export.repository.HealthConnectRepository
 import com.healthconnect.export.repository.LocalExportRepository
@@ -16,16 +15,14 @@ import com.healthconnect.export.util.ExportForegroundNotifier
 import com.healthconnect.export.util.ExportSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.LocalDate
-import java.time.LocalTime
-import java.time.temporal.ChronoUnit
+import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
 /**
- * Background worker that exports yesterday's health data and optionally syncs to Drive
+ * Background worker that exports the last seven completed days of health data and optionally syncs to Drive
  */
 class DailyExportWorker(
     context: Context,
@@ -41,6 +38,7 @@ class DailyExportWorker(
         fun schedule(
             context: Context,
             config: ExportConfig,
+            reanchor: Boolean = false,
         ) {
             // The every-2-hours webhook has its own switch: switching the export
             // frequency to Manual must not silently disable it.
@@ -64,24 +62,20 @@ class DailyExportWorker(
                     .setInputData(inputData)
                     .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
 
-            // If a time of day is configured, delay the first run until the next
-            // occurrence of that hour (subsequent runs repeat every period).
+            // Anchor only a fresh/replaced schedule to the requested clock hour.
+            // KEEP preserves the existing anchor on app opens and watchdog checks.
+            // WorkManager does not promise exact execution time.
             config.scheduleHour?.let { hour ->
-                val now = LocalTime.now()
-                val target = LocalTime.of(hour.coerceIn(0, 23), 0)
-                var delayMinutes = ChronoUnit.MINUTES.between(now, target)
-                if (delayMinutes <= 0) delayMinutes += 24 * 60
-                requestBuilder.setInitialDelay(delayMinutes, TimeUnit.MINUTES)
+                requestBuilder.setInitialDelay(
+                    ScheduleTiming.nextDelayMillis(ZonedDateTime.now(), hour.coerceIn(0, 23)),
+                    TimeUnit.MILLISECONDS,
+                )
             }
 
             val request = requestBuilder.build()
-
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                // UPDATE keeps the existing schedule but lets a changed
-                // configuration reach the already enqueued job (KEEP froze the
-                // webhook URL/token of the first enqueue forever).
-                ExistingPeriodicWorkPolicy.UPDATE,
+                if (reanchor) ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE else ExistingPeriodicWorkPolicy.KEEP,
                 request,
             )
         }
@@ -125,7 +119,12 @@ class DailyExportWorker(
     override suspend fun doWork(): Result =
         withContext(Dispatchers.IO) {
             val config = resolveConfig()
+            var stage = "start"
             try {
+                if (config.frequency == ExportFrequency.MANUAL) return@withContext Result.success()
+                DeliveryLog.recordStage(applicationContext, TRIGGER, "started; attempt=$runAttemptCount")
+                DeliveryLog.recordStage(applicationContext, TRIGGER, healthRepo.backgroundReadDiagnostic())
+                stage = "Health Connect"
                 // Best-effort only: Android 12+ refuses the promotion while the app
                 // runs in the background, and the background read permission is what
                 // makes the read legal there.
@@ -136,7 +135,7 @@ class DailyExportWorker(
                 val endDate = LocalDate.now().minusDays(1)
                 val startDate =
                     when (config.frequency) {
-                        ExportFrequency.DAILY -> endDate
+                        ExportFrequency.DAILY -> endDate.minusDays(6)
                         ExportFrequency.WEEKLY -> endDate.minusDays(6)
                         ExportFrequency.MANUAL -> endDate
                     }
@@ -159,11 +158,17 @@ class DailyExportWorker(
                     return@withContext Result.success()
                 }
 
-                // Save locally
-                val files = localRepo.saveRecords(records, config)
+                DeliveryLog.recordStage(applicationContext, TRIGGER, "Health Connect read complete")
+                stage = "local export"
+                val files = localRepo.saveRecords(recordsWithData, config)
+                DeliveryLog.recordStage(applicationContext, TRIGGER, "local export complete: ${files.size} file(s)")
 
                 // Sync to Drive if enabled and signed in
-                if (config.autoSyncDrive && driveRepo.isSignedIn()) {
+                stage = "Drive"
+                if (config.autoSyncDrive && !driveRepo.isSignedIn()) {
+                    return@withContext DeliveryOutcome.failure(applicationContext, TRIGGER, "Drive not signed in", retry = false)
+                }
+                if (config.autoSyncDrive) {
                     val driveResults =
                         files.map { file ->
                             driveRepo.uploadFile(file, "HealthConnectExport/${file.name}")
@@ -172,12 +177,14 @@ class DailyExportWorker(
                         return@withContext DeliveryOutcome.failure(
                             applicationContext,
                             TRIGGER,
-                            "Drive upload failed",
+                            "Drive upload failed: ${driveResults.count { it == null }} of ${files.size} file(s); see Android log",
                             retry = true,
                         )
                     }
                 }
 
+                if (config.autoSyncDrive) DeliveryLog.recordStage(applicationContext, TRIGGER, "Drive upload complete")
+                stage = "webhook"
                 // Send to webhook if enabled
                 if (config.autoSendWebhook && config.webhookUrl.isNotBlank()) {
                     when (val result = webhookRepo.sendRecords(config.webhookUrl, recordsWithData, config.webhookAuthToken)) {
@@ -192,6 +199,8 @@ class DailyExportWorker(
                             )
                     }
                 } else {
+                    val destination = if (config.autoSyncDrive) "local + Drive" else "local"
+                    DeliveryLog.recordExportSuccess(applicationContext, TRIGGER, "$destination: ${files.size} file(s)")
                     Result.success()
                 }
             } catch (e: SecurityException) {
@@ -199,34 +208,11 @@ class DailyExportWorker(
                 // run would fail identically forever and never deliver anything.
                 DeliveryOutcome.permissionFailure(applicationContext, TRIGGER, healthRepo, e)
             } catch (e: IllegalStateException) {
-                DeliveryOutcome.failure(applicationContext, TRIGGER, "health connect: ${e.message}", retry = true)
+                DeliveryOutcome.failure(applicationContext, TRIGGER, "$stage: ${e.javaClass.simpleName}", retry = true)
             } catch (e: Exception) {
-                DeliveryOutcome.failure(applicationContext, TRIGGER, e.message ?: e.toString(), retry = true)
+                DeliveryOutcome.failure(applicationContext, TRIGGER, "$stage: ${e.javaClass.simpleName}", retry = true)
             }
         }
 
-    /**
-     * Input data carries the configuration snapshot taken when the job was
-     * enqueued; the webhook settings are refreshed from the persisted values so
-     * a URL/token changed (or cleared) later still applies to that job.
-     */
-    private fun resolveConfig(): ExportConfig {
-        val persisted = ExportSettings.loadConfig(applicationContext)
-        val base =
-            inputData.getString(KEY_CONFIG)?.let { configJson ->
-                runCatching { Json.decodeFromString<ExportConfig>(configJson) }.getOrNull()
-            } ?: ExportConfig(
-                enabledTypes = HealthDataType.entries.toSet(),
-                frequency = ExportFrequency.DAILY,
-                autoSyncDrive = true,
-            )
-        if (!ExportSettings.hasStoredWebhookUrl(applicationContext)) return base
-
-        return base.copy(
-            webhookUrl = persisted.webhookUrl,
-            webhookAuthToken = persisted.webhookAuthToken,
-            autoSendWebhook = if (ExportSettings.hasStoredAutoSendWebhook(applicationContext)) persisted.autoSendWebhook else base.autoSendWebhook,
-            autoSendWebhookEvery2Hours = persisted.autoSendWebhookEvery2Hours,
-        )
-    }
+    private fun resolveConfig(): ExportConfig = ExportSettings.loadConfig(applicationContext)
 }

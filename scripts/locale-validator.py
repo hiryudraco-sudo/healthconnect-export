@@ -22,6 +22,7 @@ ALLOWED_ENGLISH_IN_RU = {
     # TODO: Add sections here if they're intentionally omitted from README.ru.md
     # Example: "help", "troubleshooting"
     "HealthConnect Export",
+    "Vitalink",  # Proper application brand name; identical in all locales.
     "Google Drive",
     "Health Connect",
     "Google Play",

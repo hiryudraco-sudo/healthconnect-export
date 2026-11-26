@@ -101,9 +101,7 @@ class MainActivity : ComponentActivity() {
             val healthPermissionLauncher =
                 rememberLauncherForActivityResult(
                     contract =
-                        PermissionController.createRequestPermissionResultContract(
-                            this@MainActivity.packageName,
-                        ),
+                        PermissionController.createRequestPermissionResultContract(),
                 ) { grantedPermissions: Set<String> ->
                     Log.d("MainActivity", "Permission results: $grantedPermissions")
                     viewModel.onPermissionsResult(grantedPermissions)

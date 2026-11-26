@@ -117,9 +117,7 @@ class GoogleDriveRepository(
                 mimeType = mimeTypeFor(localFile)
             }
 
-        val mediaContent = FileContent(mimeTypeFor(localFile), localFile)
-
-        // Delete all existing files with the same name before creating a new one
+        // Update in place: never delete a valid remote export before uploading.
         val existingFiles =
             drive
                 .files()
@@ -129,21 +127,40 @@ class GoogleDriveRepository(
                 .execute()
                 .files
 
-        if (existingFiles.isNotEmpty()) {
-            Log.i(TAG, "uploadFile: deleting ${existingFiles.size} existing file(s) for ${localFile.name}")
-            existingFiles.forEach { file ->
-                drive.files().delete(file.id).execute()
-                Log.i(TAG, "uploadFile: deleted existing file ${file.id}")
-            }
-        } else {
-            Log.i(TAG, "uploadFile: no existing file to overwrite, creating new")
+        if (existingFiles.size > 1) {
+            Log.w(TAG, "uploadFile: duplicate remote files for ${localFile.name}; refusing ambiguous update")
+            return null
         }
 
-        // Always create a new file
-        val driveFile = drive.files().create(fileMetadata, mediaContent).execute()
-
-        Log.i(TAG, "uploadFile: success - ${driveFile.id}")
-        return driveFile.id
+        val existing = existingFiles.firstOrNull()
+        var mergedTemp: File? = null
+        try {
+            val uploadSource =
+                if (existing != null && localFile.extension.equals("json", ignoreCase = true)) {
+                    val previous =
+                        drive.files().get(existing.id).executeMediaAsInputStream().bufferedReader().use { it.readText() }
+                    // Invalid or mismatched remote JSON aborts this upload rather than
+                    // discarding a previously valid Drive file.
+                    val merged = DailyExportMerge.merge(previous, localFile.readText())
+                    File.createTempFile("health_merge_", ".json", context.cacheDir ?: localFile.absoluteFile.parentFile).also {
+                        mergedTemp = it
+                        it.writeText(merged)
+                    }
+                } else {
+                    localFile
+                }
+            val mediaContent = FileContent(mimeTypeFor(uploadSource), uploadSource)
+            val driveFile =
+                if (existing == null) {
+                    drive.files().create(fileMetadata, mediaContent).execute()
+                } else {
+                    drive.files().update(existing.id, com.google.api.services.drive.model.File(), mediaContent).execute()
+                }
+            Log.i(TAG, "uploadFile: success - ${driveFile.id}")
+            return driveFile.id
+        } finally {
+            mergedTemp?.delete()
+        }
     }
 
     private fun mimeTypeFor(file: File): String =

@@ -25,7 +25,7 @@ class DeliveryBootReceiver : BroadcastReceiver() {
             ACTION_QUICKBOOT_POWERON,
             -> {
                 Log.i(TAG, "rescheduling delivery after ${intent.action}")
-                DeliveryWatchdog.ensureScheduled(context)
+                DeliveryWatchdog.ensureScheduled(context, reanchor = true)
                 DeliveryWatchdog.scheduleCatchUp(context, "boot")
             }
         }
