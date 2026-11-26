@@ -127,7 +127,7 @@ class ScheduleManager(
         showMessage: Boolean = true,
     ) {
         val config = buildConfig(state)
-        DailyExportWorker.schedule(application, config)
+        DailyExportWorker.schedule(application, config, reanchor = showMessage)
         // The watchdog alarm is an independent trigger: it survives Doze and OEM
         // background restrictions, where the periodic job alone can be starved.
         DeliveryWatchdog.armAlarm(application)
@@ -164,12 +164,16 @@ class ScheduleManager(
     }
 
     /**
-     * Cancels and re-creates the periodic export so that changes to the
+     * Replaces the periodic export so that changes to the
      * schedule (e.g. the time of day) take effect immediately. Silent — no
      * confirmation snackbar.
      */
     fun rescheduleExport(state: ExportUiState) {
-        DailyExportWorker.cancel(application)
-        scheduleExport(state, showMessage = false)
+        val config = buildConfig(state)
+        DailyExportWorker.schedule(application, config, reanchor = true)
+        DeliveryWatchdog.armAlarm(application)
+        onStateUpdate {
+            copy(scheduleStatus = ScheduleStatus.Scheduled("Scheduling…"))
+        }
     }
 }
