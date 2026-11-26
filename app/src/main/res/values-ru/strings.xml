@@ -1,7 +1,7 @@
 <resources>
     <!-- App -->
-    <string name="app_name">HealthConnect Export</string>
-    <string name="app_title">HealthConnect Export</string>
+    <string name="app_name">Vitalink</string>
+    <string name="app_title">Vitalink</string>
 
     <!-- Theme toggle -->
     <string name="theme_follow_system">Как в системе</string>
