@@ -18,8 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.LocalDate
-import java.time.LocalTime
-import java.time.temporal.ChronoUnit
+import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
 /**
@@ -39,6 +38,7 @@ class DailyExportWorker(
         fun schedule(
             context: Context,
             config: ExportConfig,
+            reanchor: Boolean = false,
         ) {
             // The every-2-hours webhook has its own switch: switching the export
             // frequency to Manual must not silently disable it.
@@ -62,24 +62,20 @@ class DailyExportWorker(
                     .setInputData(inputData)
                     .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
 
-            // If a time of day is configured, delay the first run until the next
-            // occurrence of that hour (subsequent runs repeat every period).
+            // Anchor only a fresh/replaced schedule to the requested clock hour.
+            // KEEP preserves the existing anchor on app opens and watchdog checks.
+            // WorkManager does not promise exact execution time.
             config.scheduleHour?.let { hour ->
-                val now = LocalTime.now()
-                val target = LocalTime.of(hour.coerceIn(0, 23), 0)
-                var delayMinutes = ChronoUnit.MINUTES.between(now, target)
-                if (delayMinutes <= 0) delayMinutes += 24 * 60
-                requestBuilder.setInitialDelay(delayMinutes, TimeUnit.MINUTES)
+                requestBuilder.setInitialDelay(
+                    ScheduleTiming.nextDelayMillis(ZonedDateTime.now(), hour.coerceIn(0, 23)),
+                    TimeUnit.MILLISECONDS,
+                )
             }
 
             val request = requestBuilder.build()
-
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                // UPDATE keeps the existing schedule but lets a changed
-                // configuration reach the already enqueued job (KEEP froze the
-                // webhook URL/token of the first enqueue forever).
-                ExistingPeriodicWorkPolicy.UPDATE,
+                if (reanchor) ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE else ExistingPeriodicWorkPolicy.KEEP,
                 request,
             )
         }
